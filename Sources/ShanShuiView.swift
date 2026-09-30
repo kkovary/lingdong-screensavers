@@ -1,0 +1,87 @@
+import ScreenSaver
+import WebKit
+import os.log
+
+private let log = OSLog(subsystem: "io.kylekovary.ShanShui", category: "saver")
+
+@objc(ShanShuiView)
+public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
+    private var webView: WKWebView?
+
+    public override init?(frame: NSRect, isPreview: Bool) {
+        super.init(frame: frame, isPreview: isPreview)
+        setUp()
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setUp()
+    }
+
+    /// Resources live next to the class in the .saver bundle. The Preview
+    /// host compiles the class into its own binary, so it points here via env.
+    private static func resourcesURL() -> URL? {
+        let fm = FileManager.default
+        if let url = Bundle(for: ShanShuiView.self).resourceURL,
+           fm.fileExists(atPath: url.appendingPathComponent("index.html").path) {
+            return url
+        }
+        if let env = ProcessInfo.processInfo.environment["SHAN_SHUI_RESOURCES"] {
+            return URL(fileURLWithPath: env, isDirectory: true)
+        }
+        return nil
+    }
+
+    private func setUp() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.white.cgColor
+
+        guard let res = Self.resourcesURL() else {
+            os_log(.error, log: log, "resources not found")
+            return
+        }
+        let index = res.appendingPathComponent("index.html")
+        guard let js = try? String(contentsOf: res.appendingPathComponent("saver.js"), encoding: .utf8) else {
+            os_log(.error, log: log, "saver.js missing at %{public}@", res.path)
+            return
+        }
+
+        let config = WKWebViewConfiguration()
+        config.userContentController.addUserScript(
+            WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+
+        let wv = WKWebView(frame: bounds, configuration: config)
+        wv.autoresizingMask = [.width, .height]
+        wv.navigationDelegate = self
+        wv.loadFileURL(index, allowingReadAccessTo: res)
+        addSubview(wv)
+        webView = wv
+    }
+
+    public override func startAnimation() {
+        super.startAnimation()
+        webView?.evaluateJavaScript("window.__saver && window.__saver.start()")
+    }
+
+    public override func stopAnimation() {
+        webView?.evaluateJavaScript("window.__saver && window.__saver.stop()")
+        super.stopAnimation()
+    }
+
+    /// Used by the preview host to capture what WebKit actually painted.
+    public func snapshot(_ completion: @escaping (NSImage?) -> Void) {
+        guard let wv = webView else { return completion(nil) }
+        wv.takeSnapshot(with: nil) { image, _ in completion(image) }
+    }
+
+    public override var hasConfigureSheet: Bool { false }
+    public override func animateOneFrame() {}
+
+    public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        os_log(.error, log: log, "navigation failed: %{public}@", error.localizedDescription)
+    }
+
+    public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        os_log(.error, log: log, "provisional navigation failed: %{public}@", error.localizedDescription)
+    }
+}
