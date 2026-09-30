@@ -16,6 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         view.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
+        // The engine drives animateOneFrame; here a timer stands in for it.
+        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in view.animateOneFrame() }
+        if let secs = ProcessInfo.processInfo.environment["SHAN_SHUI_QUIT_AFTER"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + secs) { NSApp.terminate(nil) }
+        }
         // SHAN_SHUI_SNAPSHOT=/path/prefix writes prefix-1.png at 6s and prefix-2.png at 12s, then quits.
         if let prefix = ProcessInfo.processInfo.environment["SHAN_SHUI_SNAPSHOT"] {
             for (i, delay) in [6.0, 12.0].enumerated() {

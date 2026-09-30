@@ -84,8 +84,14 @@ public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
     /// Every 10 s, log the page's state so a frozen saver can be diagnosed with
     /// `/usr/bin/log show --predicate 'subsystem == "io.kylekovary.ShanShui"'`.
     public override func animateOneFrame() {
-        let probe = "JSON.stringify({cursx: typeof MEM!=='undefined' ? Math.round(MEM.cursx) : null, vis: document.visibilityState, raf: !!(window.__saver && window.__saver.running())})"
+        os_log(.default, log: log, "animateOneFrame fired preview=%{public}d", isPreview ? 1 : 0)
+        var done = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            if !done { os_log(.error, log: log, "probe: no JS response after 5s (web process stalled?)") }
+        }
+        let probe = "JSON.stringify({cursx: typeof MEM!=='undefined' ? Math.round(MEM.cursx) : null, vis: document.visibilityState, raf: !!(window.__saver && window.__saver.running()), stats: window.__saver && window.__saver.stats()})"
         webView?.evaluateJavaScript(probe) { result, error in
+            done = true
             os_log(.default, log: log, "probe preview=%{public}d %{public}@ %{public}@",
                    self.isPreview ? 1 : 0, String(describing: result ?? "nil"), error.map { "err=\($0)" } ?? "")
         }
@@ -98,6 +104,10 @@ public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
     }
 
     public override var hasConfigureSheet: Bool { false }
+
+    public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        os_log(.error, log: log, "web content process terminated")
+    }
 
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         os_log(.error, log: log, "navigation failed: %{public}@", error.localizedDescription)
