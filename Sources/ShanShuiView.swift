@@ -33,6 +33,7 @@ public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
     }
 
     private func setUp() {
+        animationTimeInterval = 10.0
         wantsLayer = true
         layer?.backgroundColor = NSColor.white.cgColor
 
@@ -53,6 +54,15 @@ public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
         let wv = WKWebView(frame: bounds, configuration: config)
         wv.autoresizingMask = [.width, .height]
         wv.navigationDelegate = self
+        // Inside legacyScreenSaver WebKit decides the page is hidden even though the
+        // window is visible and unoccluded, so requestAnimationFrame never fires and
+        // the art freezes after the first paint. Turning off WebKit's own window
+        // occlusion tracking makes the page visible again. Private setter, so guarded.
+        if wv.responds(to: NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")) {
+            wv.setValue(false, forKey: "windowOcclusionDetectionEnabled")
+        } else {
+            os_log(.error, log: log, "occlusion setter unavailable; page may report hidden")
+        }
         wv.loadFileURL(index, allowingReadAccessTo: res)
         addSubview(wv)
         webView = wv
@@ -60,12 +70,25 @@ public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
 
     public override func startAnimation() {
         super.startAnimation()
+        os_log(.default, log: log, "startAnimation preview=%{public}d window=%{public}@ occl=%{public}ld",
+               isPreview ? 1 : 0, window.map { "\($0.frame)" } ?? "nil", window?.occlusionState.rawValue ?? -1)
         webView?.evaluateJavaScript("window.__saver && window.__saver.start()")
     }
 
     public override func stopAnimation() {
+        os_log(.default, log: log, "stopAnimation preview=%{public}d", isPreview ? 1 : 0)
         webView?.evaluateJavaScript("window.__saver && window.__saver.stop()")
         super.stopAnimation()
+    }
+
+    /// Every 10 s, log the page's state so a frozen saver can be diagnosed with
+    /// `/usr/bin/log show --predicate 'subsystem == "io.kylekovary.ShanShui"'`.
+    public override func animateOneFrame() {
+        let probe = "JSON.stringify({cursx: typeof MEM!=='undefined' ? Math.round(MEM.cursx) : null, vis: document.visibilityState, raf: !!(window.__saver && window.__saver.running())})"
+        webView?.evaluateJavaScript(probe) { result, error in
+            os_log(.default, log: log, "probe preview=%{public}d %{public}@ %{public}@",
+                   self.isPreview ? 1 : 0, String(describing: result ?? "nil"), error.map { "err=\($0)" } ?? "")
+        }
     }
 
     /// Used by the preview host to capture what WebKit actually painted.
@@ -75,7 +98,6 @@ public final class ShanShuiView: ScreenSaverView, WKNavigationDelegate {
     }
 
     public override var hasConfigureSheet: Bool { false }
-    public override func animateOneFrame() {}
 
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         os_log(.error, log: log, "navigation failed: %{public}@", error.localizedDescription)

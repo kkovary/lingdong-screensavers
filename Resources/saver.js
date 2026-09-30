@@ -40,7 +40,8 @@
 
   window.__saver = {
     start: function () { if (raf === null) { last = null; raf = requestAnimationFrame(tick); } },
-    stop: function () { if (raf !== null) { cancelAnimationFrame(raf); raf = null; } }
+    stop: function () { if (raf !== null) { cancelAnimationFrame(raf); raf = null; } },
+    running: function () { return raf !== null; }
   };
 
   try {
