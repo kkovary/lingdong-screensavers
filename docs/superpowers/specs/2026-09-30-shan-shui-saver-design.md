@@ -59,8 +59,11 @@ shan-shui-saver/
 - `hasConfigureSheet` returns false. `animationTimeInterval` is irrelevant
   since the web view drives its own frames; `animateOneFrame` is a no-op.
 - Preview mode (`isPreview == true`) uses the same content. Nothing differs.
-- Resources are located via `Bundle(for: ShanShuiView.self)`, never
-  `Bundle.main`, because the host process is not ours.
+- Resources are located via `Bundle(for: ShanShuiView.self).resourceURL`,
+  never `Bundle.main`, because the host process is not ours. If
+  `index.html` is not found there (the case in the Preview executable, where
+  the class is compiled into the binary), fall back to the directory named
+  by the `SHAN_SHUI_RESOURCES` environment variable.
 
 ### saver.js
 
@@ -99,7 +102,8 @@ ShanShuiView`, `CFBundleExecutable = ShanShui`, `LSMinimumSystemVersion =
   pane.
 - `make preview`: compile `Preview.swift` + `ShanShuiView.swift` into an
   executable that opens a 1280x800 window containing the view and calls
-  `startAnimation()`. It uses the built bundle's resources.
+  `startAnimation()`. Run with `SHAN_SHUI_RESOURCES=Resources` so the view
+  finds the page.
 - `make test`: run `Tests/smoke.swift` (see Testing).
 - `make clean`.
 
