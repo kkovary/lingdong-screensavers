@@ -10,13 +10,15 @@
 (function () {
   "use strict";
   var CARD_W = 520, CARD_H = 320;
-  var DRAW_S = [22, 40];    // seconds to plot one fish (random per fish)
-  var HOLD_S = 4;           // seconds a finished fish stays before the next
+  var DRAW_S = [15, 28];    // seconds to plot one fish (random per fish)
+  var HOLD_S = [30, 75];    // seconds a finished fish stays: most of the wall is finished fish
   var FADE_S = 1.5;         // must match the CSS transition
+  var BUSY_SHARE = 0.3;     // at most this share of cards drawing (or changing) at once
+  var START_DONE = 0.6;     // share of cards that open already finished, mid-rest
   var INK = "#1a1a1a";
 
   var dpr = window.devicePixelRatio || 1, W = innerWidth, H = innerHeight;
-  var rows = H >= 1100 ? 3 : 2;
+  var rows = H >= 1100 ? 4 : 3;
   var ch = Math.floor(H * 0.86 / rows), cw = Math.floor(ch * CARD_W / CARD_H);
   if (cw > W * 0.9) { cw = Math.floor(W * 0.9); ch = Math.floor(cw * CARD_H / CARD_W); }
   var gap = Math.round(ch * 0.12);
@@ -30,14 +32,15 @@
   // --- worker pool ---------------------------------------------------------
   var src = URL.createObjectURL(new Blob([self.FISH_WORKER_SRC], { type: "text/javascript" }));
   var idle = [], queue = [], waiting = {}, nextId = 1, errors = [];
-  var stats = { made: 0, genMs: 0, frames: 0, since: null, maxGap: 0 };
+  var stats = { made: 0, genMs: 0, frames: 0, since: null, maxGap: 0, retries: 0 };
   function dispatch() { while (idle.length && queue.length) idle.pop().postMessage(queue.shift()); }
   for (var wi = 0; wi < 2; wi++) {
     var w = new Worker(src);
     w.onmessage = function (e) {
       idle.push(this);
       var cb = waiting[e.data.id]; delete waiting[e.data.id];
-      stats.made++; stats.genMs = e.data.genMs;
+      stats.made++; stats.genMs = e.data.genMs; stats.retries += e.data.failures;
+      if (e.data.error) errors.push(e.data.error);
       if (cb) cb(e.data.polys);
       dispatch();
     };
@@ -69,7 +72,17 @@
                  cur: null, drawn: 0, speed: 0 });
   }
 
-  function ask(cd) { cd.next = "pending"; requestFish(function (polys) { cd.next = prepare(polys); }); }
+  var MAX_BUSY = 1;         // set once the grid is built
+  function busy() {
+    var n = 0;
+    for (var i = 0; i < cards.length; i++) { var p = cards[i].phase; if (p === "pre" || p === "draw" || p === "fade") n++; }
+    return n;
+  }
+
+  function ask(cd) {
+    cd.next = "pending";
+    requestFish(function (polys) { cd.next = polys ? prepare(polys) : null; });   // null: asked again next frame
+  }
 
   function begin(cd, f, delay) {
     var x = cd.ctx;
@@ -115,6 +128,8 @@
     return cur.i >= P.length;
   }
 
+  MAX_BUSY = Math.max(1, Math.round(cards.length * BUSY_SHARE));
+
   var clock = 0, last = null, raf = null;
   function tick(now) {
     raf = requestAnimationFrame(tick);
@@ -128,20 +143,31 @@
     for (var i = 0; i < cards.length; i++) {
       var cd = cards[i];
       switch (cd.phase) {
-        case "waiting":                                     // first fish for this card, staggered
+        case "waiting":                                     // first fish for this card
           if (cd.next === null) ask(cd);
-          else if (cd.next !== "pending") begin(cd, cd.next, Math.random() * 6);
+          else if (cd.next !== "pending") {
+            // Open at a random point in the cycle: most cards already finished
+            // and partway through resting, the rest drawing as slots allow.
+            if (Math.random() < START_DONE || busy() >= MAX_BUSY) {
+              begin(cd, cd.next, 0);
+              plot(cd, Infinity);
+              cd.phase = "hold"; cd.at = clock + Math.random() * rand(HOLD_S);
+              ask(cd);
+            } else {
+              begin(cd, cd.next, Math.random() * 8);
+            }
+          }
           break;
         case "pre":
           if (clock >= cd.at) { cd.phase = "draw"; ask(cd); }   // fetch the next fish now; it is ready long before needed
           break;
         case "draw":
-          if (plot(cd, cd.speed * dt)) { cd.phase = "hold"; cd.at = clock + HOLD_S; }
+          if (plot(cd, cd.speed * dt)) { cd.phase = "hold"; cd.at = clock + rand(HOLD_S); }
           break;
         case "hold":
-          if (clock >= cd.at && cd.next && cd.next !== "pending") {
+          if (clock >= cd.at && cd.next && cd.next !== "pending" && busy() < MAX_BUSY) {
             cd.el.classList.remove("on"); cd.phase = "fade"; cd.at = clock + FADE_S;
-          }
+          } else if (cd.next === null) ask(cd);
           break;
         case "fade":
           if (clock >= cd.at) begin(cd, cd.next, 0.3);
@@ -156,7 +182,7 @@
     stats: function () {
       var secs = stats.since === null ? 0 : (performance.now() - stats.since) / 1000, by = {};
       cards.forEach(function (c) { by[c.phase] = (by[c.phase] || 0) + 1; });
-      var out = { grid: cols + "x" + rows, made: stats.made, lastGenMs: stats.genMs,
+      var out = { grid: cols + "x" + rows, maxBusy: MAX_BUSY, made: stats.made, retries: stats.retries, lastGenMs: stats.genMs,
                   fps: Math.round(stats.frames / Math.max(secs, 0.001)), maxGapMs: Math.round(stats.maxGap),
                   phases: by, errors: errors.slice(-3) };
       stats.frames = 0; stats.since = null; stats.maxGap = 0;
