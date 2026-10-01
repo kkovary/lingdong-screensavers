@@ -10,18 +10,58 @@ Native macOS screensavers made from [Lingdong Huang](https://github.com/LingDong
 | Hermit | [Hermit](https://github.com/LingDong-/Hermit) | The 2015 pygame game on autopilot: a rider walks forever through a procedural forest as day turns to night, with random terrain, time of day and wildlife. |
 | Lingdong Shuffle | all of the above | Starts on a random one of the four and every 5 minutes picks again at random; picking the current one leaves it running. |
 
-Apple silicon, macOS 14 or later. Needs only the Command Line Tools, not Xcode. The first Hermit build downloads a pinned, checksum-verified Pyodide runtime (about 20 MB) into a gitignored folder.
+## Setup
 
-## Use
+**You need:**
+
+- A Mac with Apple silicon (M1 or later) running macOS 14 Sonoma or later. Tested on macOS 27.
+- Apple's Command Line Tools. Xcode itself is not needed. Install them with:
+
+  ```
+  xcode-select --install
+  ```
+
+  This also provides `git`, `make`, `swiftc` and `python3`, which the build uses.
+- An internet connection for the first build only. Hermit downloads a pinned Pyodide runtime (about 20 MB) from jsDelivr and checks every file against a SHA-256 checksum.
+
+**Build and install:**
 
 ```
-make install              # build, ad-hoc sign and install every saver
-make install-fishdraw     # just one (ids are the folder names in savers/)
-make preview-nonflowers   # run one in a window, no screensaver engine
-make uninstall
+git clone https://github.com/kkovary/lingdong-screensavers.git
+cd lingdong-screensavers
+make install
 ```
 
-Then pick one in System Settings > Wallpaper > Screen Saver. The bundles are ad-hoc signed and built locally, so Gatekeeper normally leaves them alone.
+This builds all five savers, signs them locally (ad-hoc), and copies them to `~/Library/Screen Savers`. Nothing is installed system-wide and no password is needed.
+
+**Turn one on:** open System Settings, go to Wallpaper, scroll to Screen Saver, and pick one from the Other section. Hover the thumbnail and click Preview to see it full screen. To start it on demand, set a hot corner under Desktop & Dock > Hot Corners.
+
+**Other commands:**
+
+```
+make install-fishdraw     # build and install just one (ids are the folder names in savers/)
+make preview-nonflowers   # run one in a normal window, no screensaver engine
+make uninstall            # remove all of them from ~/Library/Screen Savers
+make clean                # delete build output
+```
+
+**Updating:** `git pull && make install`. The install step restarts the screensaver host so the new build loads.
+
+### Troubleshooting
+
+- **A saver doesn't appear in the list.** Quit and reopen System Settings; it only scans `~/Library/Screen Savers` when it opens.
+- **"Cannot be opened" or "blocked" warning.** This happens if you copy a built `.saver` from another Mac, because it arrives with a quarantine flag. Build it on the Mac that uses it, or clear the flag: `xattr -dr com.apple.quarantine ~/Library/Screen\ Savers/<Name>.saver`.
+- **The picture is frozen or blank.** Every saver logs its state every 10 seconds. Read the log with the full path, since `log` is a zsh builtin:
+
+  ```
+  /usr/bin/log show --last 5m --predicate 'subsystem BEGINSWITH "io.kylekovary."' --style compact
+  ```
+
+- **Memory.** Hermit runs Python in WebAssembly and uses about 330 MB per screen. The others are much lighter.
+
+### Tuning
+
+The pacing lives near the top of each saver's script: rest and growth times plus how many flowers grow at once in `savers/nonflowers/Resources/gallery.js`, drawing and rest times plus how many fish draw at once in `savers/fishdraw/Resources/plotter.js`, pan speed in `savers/shanshui/Resources/saver.js`, and spawn timing in `savers/hermit/Resources/hermit/main.py`. The shuffle interval is `SWITCH` (seconds) in `savers/shuffle/saver.conf`. Run `make install` after changing anything.
 
 ## Layout
 
