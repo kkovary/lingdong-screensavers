@@ -28,6 +28,8 @@
 	<string>@BG@</string>
 	<key>WSIndex</key>
 	<string>@INDEX@</string>
+	<key>WSFileAccess</key>
+	<string>@FILE_ACCESS@</string>
 	<key>WSCycleSeconds</key>
 	<string>@CYCLE@</string>
 </dict>

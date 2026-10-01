@@ -11,6 +11,7 @@ import os.log
 ///   WSIndex          page to load, relative to Resources (default index.html)
 ///   WSScript         script injected at document end (default saver.js; optional)
 ///   WSBackground     hex colour shown before the page paints (default FFFFFF)
+///   WSFileAccess     1 = let the page fetch() other files in Resources (WASM runtimes)
 ///   WSCycleSeconds   0 = one page forever. N > 0 = every N seconds load a fresh
 ///                    copy of the page in a hidden second view, wait until it sets
 ///                    window.__saverReady = true, then crossfade to it.
@@ -61,6 +62,13 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
 
     private func makeWebView(_ res: URL) -> WKWebView? {
         let config = WKWebViewConfiguration()
+        // Opt-in (WSFileAccess = 1): savers that bundle a WASM runtime such as
+        // Pyodide need the page to fetch() sibling file:// resources, which
+        // WebKit's file-URL policy otherwise blocks even though loadFileURL
+        // grants read access to Resources. Private preference, so guarded.
+        if info("WSFileAccess") == "1" {
+            config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        }
         let scriptURL = res.appendingPathComponent(info("WSScript") ?? "saver.js")
         if let js = try? String(contentsOf: scriptURL, encoding: .utf8) {
             config.userContentController.addUserScript(
