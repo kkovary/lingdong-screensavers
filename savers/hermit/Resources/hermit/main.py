@@ -42,7 +42,9 @@ screen = pygame.display.set_mode([width//2, height+50])
 canvas = pygame.Surface([width//2, height])
 
 ## terrain
-treeDensity = 32
+# Random start (each launch): forest density, terrain and time of day.
+_density = random.uniform(0.8, 1.5)          # >1 = sparser, <1 = denser
+treeDensity = int(32*_density)
 landDensity = 32
 allloads = width//treeDensity
 loaded = 0
@@ -51,7 +53,7 @@ Ls = [None]*4
 Lrs = [None]*4
 
 lspds = [0.1, 0.2, 0.5, 1]
-terrain = [0]*4
+terrain = [random.choice([0, 1])]*4            # 0 = flat forest, 1 = hills (cf. console 'set terrain')
 totalMade = [0]*4
 
 locs = [0, 0, 0, 0]
@@ -71,7 +73,8 @@ screen.fill([240, 240, 240])
 x = 0
 SPEED = 0.5
 clock = pygame.time.Clock()
-T = 0
+T0 = random.randrange(0, 12566)              # day-night is sin(T*0.0005+1): ~12566 frames, ~7 min
+T = T0
 
 ## objects
 pctrl = particle.ParticleCtrl()
@@ -97,6 +100,12 @@ man.walk()
 # Autopilot state
 _autopilot_drink_cooldown = 0
 _autopilot_mount_cooldown = 0
+
+# Spawn director (frames at ~30 fps): something new appears ahead every
+# 12-35 s, chosen to suit the current terrain (upstream alternates terrain
+# per layer on its own). Caps keep the scene from clogging up.
+_spawn_timer = random.randrange(90, 300)
+MAX_DEER, MAX_CRANES, MAX_BIRDS = 4, 8, 30
 
 
 # =============================================================================
@@ -354,7 +363,7 @@ def draw():
 
 def autopilot_step():
     """Autopilot: walk right, occasionally do interesting things."""
-    global x, _autopilot_drink_cooldown, _autopilot_mount_cooldown
+    global x, _autopilot_drink_cooldown, _autopilot_mount_cooldown, _spawn_timer
 
     _autopilot_drink_cooldown -= 1
     _autopilot_mount_cooldown -= 1
@@ -377,12 +386,17 @@ def autopilot_step():
         horse.walk()
         man.walk()
 
-        if random.random() < 0.0005:
-            makeBirds(random.randrange(6, 12))
-        if random.random() < 0.0005 and terrain[3] == 0:
-            makeDeers(1)
-        if random.random() < 0.001 and terrain[3] == 1:
-            makeCranes(random.randrange(1, 5))
+        _spawn_timer -= 1
+        if _spawn_timer <= 0:
+            _spawn_timer = random.randrange(360, 1050)
+            hills = terrain[3] == 1
+            choice = random.choice(["cranes", "cranes", "birds"] if hills else ["deer", "deer", "birds"])
+            if choice == "deer" and len(deers) < MAX_DEER:
+                makeDeers(random.randrange(1, 3))
+            elif choice == "cranes" and len(cranes) < MAX_CRANES:
+                makeCranes(random.randrange(2, 6))
+            elif len(birds) < MAX_BIRDS:
+                makeBirds(random.randrange(5, 12))
     else:
         horse.rest()
         man.rest()
@@ -410,9 +424,14 @@ def autopilot_step():
 # =============================================================================
 
 # Initial terrain generation (synchronous, replaces threaded loading)
-makeBirds(10)
+# Random opening cast, suited to the starting terrain.
+makeBirds(random.randrange(0, 14))
+if terrain[3] == 0:
+    makeDeers(random.randrange(0, 3))
+else:
+    makeCranes(random.randrange(0, 5))
 mt(1, 3, 2, 1, 0)
-treeDensity = 16
+treeDensity = int(16*_density)
 mt(2, 3, 2, 1, 0)
 
 _stats["start_time"] = _time.time()
@@ -429,7 +448,7 @@ async def main():
         draw()
         clock.tick(30)  # Cap at 30 fps for performance
         T += 1
-        _stats["frames"] = T
+        _stats["frames"] = T - T0
         _stats["fps"] = clock.get_fps()
 
         man.yo = height-20-onLandY(man.x)

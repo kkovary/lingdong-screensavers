@@ -11,7 +11,7 @@
 (function () {
   "use strict";
   var GROW_S = [16, 34];      // random growth duration per painting
-  var HOLD_S = [45, 110];     // how long a finished painting stays up
+  var HOLD_S = [3, 7];        // how long a finished painting rests before the next
   var FADE_S = 2.5;           // card fade in/out
   var FEATHER = 0.006;        // width of the soft growth edge, as a fraction of growth time
 
@@ -216,10 +216,13 @@
         case "grow":
           // Slight ease-out so growth settles rather than stopping dead.
           var lin = Math.min(1, (clock - cd.grow.start) / cd.grow.dur);
+          // Ask for the next painting halfway through growing, so it is ready by the end of the rest.
+          if (lin >= 0.5 && cd.next === null) askFor(cd);
           cd.grow.prog = (1 - Math.pow(1 - lin, 1.6)) * (1 + 2 * FEATHER);
           if (lin >= 1) {
             gl.deleteTexture(cd.tex.P); gl.deleteTexture(cd.tex.T); cd.tex.P = cd.tex.T = null;
-            cd.grow = null; cd.state = "hold"; cd.at = clock + rand(HOLD_S); askFor(cd);
+            cd.grow = null; cd.state = "hold"; cd.at = clock + rand(HOLD_S);
+            if (cd.next === null) askFor(cd);
           }
           break;
         case "hold":

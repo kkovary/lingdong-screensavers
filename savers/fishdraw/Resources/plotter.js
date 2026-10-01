@@ -9,8 +9,8 @@
   "use strict";
   var CARD_W = 520, CARD_H = 320;
   var DRAW_S = 35;        // seconds to plot one fish
-  var HOLD_S = 20;        // seconds to admire it
-  var FADE_S = 2.5;       // must match the CSS transition
+  var HOLD_S = 4;         // seconds to admire it before the next fish
+  var FADE_S = 1.5;       // must match the CSS transition
   var LINE_PT = 1.15;     // pen width in screen points, independent of zoom
   var INK = "#1a1a1a";
 
