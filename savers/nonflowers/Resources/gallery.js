@@ -11,7 +11,10 @@
 (function () {
   "use strict";
   var GROW_S = [16, 34];      // random growth duration per painting
-  var HOLD_S = [3, 7];        // how long a finished painting rests before the next
+  var HOLD_S = [35, 80];      // how long a finished painting rests: most of the wall is still
+  var BUSY_SHARE = 0.2;       // at most this share of cards growing or changing at once (calmer than the fish)
+  var START_DONE = 0.6;       // share of cards that open already in bloom, mid-rest
+  var PREFETCH_S = 15;        // ask for the next painting this long before a rest ends
   var FADE_S = 2.5;           // card fade in/out
   var FEATHER = 0.006;        // width of the soft growth edge, as a fraction of growth time
 
@@ -188,6 +191,17 @@
   }
 
   // State machine per card, on our own clock (seconds).
+  var MAX_BUSY = Math.max(1, Math.round(cards.length * BUSY_SHARE));
+  function busy() {
+    var n = 0;
+    for (var i = 0; i < cards.length; i++) { var st = cards[i].state; if (st === "pregrow" || st === "grow" || st === "fadeout") n++; }
+    return n;
+  }
+  function finishGrowth(cd) {                     // drop the textures only growth needs
+    gl.deleteTexture(cd.tex.P); gl.deleteTexture(cd.tex.T); cd.tex.P = cd.tex.T = null;
+    cd.grow = null;
+  }
+
   var clock = 0, last = null, raf = null;
   function tick(nowMs) {
     raf = requestAnimationFrame(tick);
@@ -207,7 +221,13 @@
           if (cd.next === null) askFor(cd);
           else if (cd.next !== "pending") {
             install(cd, cd.next); fade(cd, 1);
-            cd.state = "pregrow"; cd.at = clock + FADE_S + Math.random() * 2;
+            // Open at a random point in the cycle: most cards already in bloom and
+            // partway through resting, the rest growing as slots allow.
+            if (Math.random() < START_DONE || busy() >= MAX_BUSY) {
+              finishGrowth(cd); cd.state = "hold"; cd.at = clock + Math.random() * rand(HOLD_S);
+            } else {
+              cd.state = "pregrow"; cd.at = clock + FADE_S + Math.random() * 6;
+            }
           }
           break;
         case "pregrow":
@@ -216,19 +236,16 @@
         case "grow":
           // Slight ease-out so growth settles rather than stopping dead.
           var lin = Math.min(1, (clock - cd.grow.start) / cd.grow.dur);
-          // Ask for the next painting halfway through growing, so it is ready by the end of the rest.
-          if (lin >= 0.5 && cd.next === null) askFor(cd);
           cd.grow.prog = (1 - Math.pow(1 - lin, 1.6)) * (1 + 2 * FEATHER);
-          if (lin >= 1) {
-            gl.deleteTexture(cd.tex.P); gl.deleteTexture(cd.tex.T); cd.tex.P = cd.tex.T = null;
-            cd.grow = null; cd.state = "hold"; cd.at = clock + rand(HOLD_S);
-            if (cd.next === null) askFor(cd);
-          }
+          if (lin >= 1) { finishGrowth(cd); cd.state = "hold"; cd.at = clock + rand(HOLD_S); }
           break;
         case "hold":
-          if (clock >= cd.at && cd.next && cd.next !== "pending") {
+          // Fetch the next painting shortly before the rest ends (also retries a failed one),
+          // then change only when a growth slot is free.
+          if (cd.next === null && clock >= cd.at - PREFETCH_S) askFor(cd);
+          if (clock >= cd.at && cd.next && cd.next !== "pending" && busy() < MAX_BUSY) {
             fade(cd, 0); cd.state = "fadeout"; cd.at = clock + FADE_S;
-          } else if (clock >= cd.at && cd.next === null) askFor(cd);    // request failed; retry
+          }
           break;
         case "fadeout":
           if (clock >= cd.at) {
@@ -249,7 +266,7 @@
       var secs = stats.since === null ? 0 : (performance.now() - stats.since) / 1000;
       var by = {};
       cards.forEach(function (c) { by[c.state] = (by[c.state] || 0) + 1; });
-      var out = { grid: cols + "x" + rows, card: card, K: K, pool: POOL, made: stats.made, lastGenMs: stats.genMs,
+      var out = { grid: cols + "x" + rows, maxBusy: MAX_BUSY, card: card, K: K, pool: POOL, made: stats.made, lastGenMs: stats.genMs,
                   fps: Math.round(stats.frames / Math.max(secs, 0.001)), maxGapMs: Math.round(stats.maxGap),
                   worstFrameMs: Math.round(stats.worstMs), states: by, queued: queue.length,
                   errors: errors.slice(-3) };
