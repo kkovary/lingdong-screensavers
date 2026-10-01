@@ -22,7 +22,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         view.startAnimation()
         NSApp.activate(ignoringOtherApps: true)
-        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in view.animateOneFrame() }
 
         if let at = env["WEBSAVER_CYCLE_AT"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + at) { view.cycleNow() }
