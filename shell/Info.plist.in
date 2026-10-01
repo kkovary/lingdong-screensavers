@@ -30,7 +30,9 @@
 	<string>@INDEX@</string>
 	<key>WSFileAccess</key>
 	<string>@FILE_ACCESS@</string>
-	<key>WSCycleSeconds</key>
-	<string>@CYCLE@</string>
+	<key>WSPlaylist</key>
+	<string>@PLAYLIST@</string>
+	<key>WSPlaylistSeconds</key>
+	<string>@SWITCH@</string>
 </dict>
 </plist>

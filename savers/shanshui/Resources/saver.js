@@ -171,6 +171,7 @@
     document.body.style.cssText = "margin:0;overflow:hidden;background:#fff;";
     buildStage();
     window.__saver.start();
+    window.__saverReady = true;
   } catch (e) {
     console.log("saver.js init failed: " + e);
   }

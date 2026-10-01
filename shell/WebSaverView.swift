@@ -2,26 +2,36 @@ import ScreenSaver
 import WebKit
 import os.log
 
-/// Generic screensaver that shows a bundled web page in a WKWebView.
+/// Generic screensaver that shows bundled web pages in a WKWebView.
 ///
 /// Each saver subclasses this with a unique @objc name (macOS can load several
 /// savers into one host process, so class names must not collide) and
 /// configures it through its own Info.plist:
 ///
-///   WSIndex          page to load, relative to Resources (default index.html)
-///   WSScript         script injected at document end (default saver.js; optional)
-///   WSBackground     hex colour shown before the page paints (default FFFFFF)
-///   WSFileAccess     1 = let the page fetch() other files in Resources (WASM runtimes)
-///   WSCycleSeconds   0 = one page forever. N > 0 = every N seconds load a fresh
-///                    copy of the page in a hidden second view, wait until it sets
-///                    window.__saverReady = true, then crossfade to it.
+///   WSIndex             page to load, relative to Resources (default index.html)
+///   WSScript            script injected at document end (default saver.js; optional)
+///   WSBackground        hex colour shown before the page paints (default FFFFFF)
+///   WSFileAccess        1 = let the page fetch() other files in Resources (WASM runtimes)
+///   WSPlaylist          optional JSON file in Resources listing several pages, each
+///                       {name, dir, index, script, fileAccess, background}; overrides the above
+///   WSPlaylistSeconds   with a playlist: every N seconds pick a page at random. Picking the
+///                       one already showing leaves it running; otherwise the new page loads
+///                       hidden, crossfades in once window.__saverReady is true, and the old
+///                       page is torn down.
 ///
 /// Pages may expose window.__saver = { start(), stop(), stats() }.
 open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
-    private var views: [WKWebView] = []
-    private var front = 0
-    private var cycleTimer: Timer?
+    struct Page {
+        let name: String, dir: String, index: String, script: String?
+        let fileAccess: Bool, background: String
+    }
+
+    private var pages: [Page] = []
+    private var current: (page: Int, view: WKWebView)?
+    private var incoming: (page: Int, view: WKWebView)?
+    private var switchTimer: Timer?
     private var readyPoll: Timer?
+    private var probing = false, crossfading = false
     private lazy var bundle: Bundle = {
         // The preview host has no bundle of its own; it points at a built .saver.
         if let p = ProcessInfo.processInfo.environment["WEBSAVER_BUNDLE"], let b = Bundle(path: p) { return b }
@@ -30,7 +40,7 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
     private lazy var log = OSLog(subsystem: bundle.bundleIdentifier ?? "io.kylekovary.WebSaver", category: "saver")
 
     private func info(_ key: String) -> String? { bundle.object(forInfoDictionaryKey: key) as? String }
-    private var cycleSeconds: Double { Double(info("WSCycleSeconds") ?? "0") ?? 0 }
+    private var switchSeconds: Double { Double(info("WSPlaylistSeconds") ?? "0") ?? 0 }
 
     public override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
@@ -45,32 +55,44 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
     private func setUp() {
         animationTimeInterval = 10.0
         wantsLayer = true
-        layer?.backgroundColor = Self.color(info("WSBackground") ?? "FFFFFF").cgColor
-        guard let res = bundle.resourceURL else {
-            os_log(.error, log: log, "no resource URL")
-            return
-        }
-        let count = cycleSeconds > 0 ? 2 : 1
-        for i in 0..<count {
-            guard let wv = makeWebView(res) else { return }
-            wv.alphaValue = i == 0 ? 1 : 0
+        pages = loadPlaylist() ?? [Page(name: bundle.bundleIdentifier ?? "page", dir: "",
+                                       index: info("WSIndex") ?? "index.html", script: info("WSScript") ?? "saver.js",
+                                       fileAccess: info("WSFileAccess") == "1", background: info("WSBackground") ?? "FFFFFF")]
+        let i = Int.random(in: pages.indices)
+        if let wv = makeWebView(pages[i]) {
             addSubview(wv)
-            views.append(wv)
+            current = (i, wv)
+            layer?.backgroundColor = Self.color(pages[i].background).cgColor
+            os_log(.default, log: log, "showing %{public}@", pages[i].name)
         }
-        load(views[0])
     }
 
-    private func makeWebView(_ res: URL) -> WKWebView? {
+    private func loadPlaylist() -> [Page]? {
+        guard let file = info("WSPlaylist"), !file.isEmpty, let res = bundle.resourceURL,
+              let data = try? Data(contentsOf: res.appendingPathComponent(file)),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !list.isEmpty else { return nil }
+        return list.map { d in
+            Page(name: d["name"] as? String ?? "?", dir: d["dir"] as? String ?? "",
+                 index: d["index"] as? String ?? "index.html", script: d["script"] as? String,
+                 fileAccess: d["fileAccess"] as? Bool ?? false, background: d["background"] as? String ?? "FFFFFF")
+        }
+    }
+
+    private func makeWebView(_ page: Page) -> WKWebView? {
+        guard let res = bundle.resourceURL else {
+            os_log(.error, log: log, "no resource URL")
+            return nil
+        }
+        let root = page.dir.isEmpty ? res : res.appendingPathComponent(page.dir, isDirectory: true)
         let config = WKWebViewConfiguration()
-        // Opt-in (WSFileAccess = 1): savers that bundle a WASM runtime such as
-        // Pyodide need the page to fetch() sibling file:// resources, which
-        // WebKit's file-URL policy otherwise blocks even though loadFileURL
-        // grants read access to Resources. Private preference, so guarded.
-        if info("WSFileAccess") == "1" {
+        // Opt-in: savers that bundle a WASM runtime such as Pyodide need the page
+        // to fetch() sibling file:// resources, which WebKit's file-URL policy
+        // otherwise blocks even though loadFileURL grants read access.
+        if page.fileAccess {
             config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         }
-        let scriptURL = res.appendingPathComponent(info("WSScript") ?? "saver.js")
-        if let js = try? String(contentsOf: scriptURL, encoding: .utf8) {
+        if let script = page.script,
+           let js = try? String(contentsOf: root.appendingPathComponent(script), encoding: .utf8) {
             config.userContentController.addUserScript(
                 WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
@@ -87,58 +109,80 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
         } else {
             os_log(.error, log: log, "occlusion setter unavailable; page may report hidden")
         }
+        wv.loadFileURL(root.appendingPathComponent(page.index), allowingReadAccessTo: root)
         return wv
     }
 
-    private func load(_ wv: WKWebView) {
-        guard let res = bundle.resourceURL else { return }
-        wv.loadFileURL(res.appendingPathComponent(info("WSIndex") ?? "index.html"), allowingReadAccessTo: res)
-    }
+    // MARK: playlist
 
-    // MARK: cycling
-
-    private func scheduleCycle() {
-        guard cycleSeconds > 0, views.count == 2 else { return }
-        cycleTimer?.invalidate()
-        cycleTimer = Timer.scheduledTimer(withTimeInterval: cycleSeconds, repeats: false) { [weak self] _ in
-            self?.prepareNext()
+    private func scheduleSwitch() {
+        switchTimer?.invalidate()
+        guard switchSeconds > 0, pages.count > 1 else { return }
+        switchTimer = Timer.scheduledTimer(withTimeInterval: switchSeconds, repeats: false) { [weak self] _ in
+            self?.turn(forceChange: false)
         }
     }
 
-    private func prepareNext() {
-        let back = views[1 - front]
-        load(back)
+    /// Pick a page at random. The page already showing just keeps running.
+    private func turn(forceChange: Bool) {
+        guard let cur = current, incoming == nil else { return }
+        var j = Int.random(in: pages.indices)
+        if forceChange && pages.count > 1 { while j == cur.page { j = Int.random(in: pages.indices) } }
+        if j == cur.page {
+            os_log(.default, log: log, "turn: keeping %{public}@", pages[j].name)
+            scheduleSwitch()
+            return
+        }
+        guard let wv = makeWebView(pages[j]) else { return scheduleSwitch() }
+        // Load the new page fully opaque *underneath* the current one, then fade
+        // the old page out on top, so a page is never transparent while it
+        // starts (WebKit may treat a fully transparent view as hidden).
+        addSubview(wv, positioned: .below, relativeTo: cur.view)
+        incoming = (j, wv)
+        os_log(.default, log: log, "turn: loading %{public}@", pages[j].name)
         let started = Date()
         readyPoll?.invalidate()
         readyPoll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
-            guard let self else { return t.invalidate() }
-            back.evaluateJavaScript("window.__saverReady === true") { r, _ in
+            guard let self, let inc = self.incoming else { return t.invalidate() }
+            // A page busy starting up (Hermit loads Python for a few seconds) answers
+            // late; keep one question in flight so answers can't pile up.
+            if self.probing || self.crossfading { return }
+            self.probing = true
+            inc.view.evaluateJavaScript("window.__saverReady === true") { r, _ in
+                self.probing = false
+                guard self.incoming?.view === inc.view, !self.crossfading else { return }
                 if (r as? Bool) == true {
                     t.invalidate()
-                    os_log(.default, log: self.log, "next page ready after %.1fs", Date().timeIntervalSince(started))
+                    os_log(.default, log: self.log, "turn: %{public}@ ready after %.1fs", self.pages[inc.page].name,
+                           Date().timeIntervalSince(started))
                     self.crossfade()
-                } else if Date().timeIntervalSince(started) > 120 {
+                } else if Date().timeIntervalSince(started) > 90 {
                     t.invalidate()
-                    os_log(.error, log: self.log, "next page never became ready; keeping current")
-                    self.scheduleCycle()
+                    os_log(.error, log: self.log, "turn: %{public}@ never became ready; keeping current", self.pages[inc.page].name)
+                    inc.view.removeFromSuperview()
+                    self.incoming = nil
+                    self.scheduleSwitch()
                 }
             }
         }
     }
 
     private func crossfade() {
-        let old = views[front], new = views[1 - front]
-        front = 1 - front
-        addSubview(new, positioned: .above, relativeTo: old)
-        new.evaluateJavaScript("window.__saver && window.__saver.start && window.__saver.start()")
+        guard let old = current, let new = incoming, !crossfading else { return }
+        crossfading = true
+        new.view.evaluateJavaScript("window.__saver && window.__saver.start && window.__saver.start()")
+        layer?.backgroundColor = Self.color(pages[new.page].background).cgColor
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 3
-            new.animator().alphaValue = 1
+            old.view.animator().alphaValue = 0
         }, completionHandler: {
-            old.alphaValue = 0
-            old.evaluateJavaScript("window.__saver && window.__saver.stop && window.__saver.stop()")
-            old.loadHTMLString("", baseURL: nil)   // free the old page's memory
-            self.scheduleCycle()
+            old.view.evaluateJavaScript("window.__saver && window.__saver.stop && window.__saver.stop()")
+            old.view.navigationDelegate = nil
+            old.view.removeFromSuperview()          // releases the page and its web process
+            self.current = new
+            self.incoming = nil
+            self.crossfading = false
+            self.scheduleSwitch()
         })
     }
 
@@ -148,25 +192,28 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
         super.startAnimation()
         os_log(.default, log: log, "startAnimation preview=%{public}d frame=%{public}@",
                isPreview ? 1 : 0, window.map { "\($0.frame)" } ?? "nil")
-        views.first?.evaluateJavaScript("window.__saver && window.__saver.start && window.__saver.start()")
-        scheduleCycle()
+        current?.view.evaluateJavaScript("window.__saver && window.__saver.start && window.__saver.start()")
+        scheduleSwitch()
     }
 
     open override func stopAnimation() {
         os_log(.default, log: log, "stopAnimation preview=%{public}d", isPreview ? 1 : 0)
-        cycleTimer?.invalidate(); readyPoll?.invalidate()
-        views.forEach { $0.evaluateJavaScript("window.__saver && window.__saver.stop && window.__saver.stop()") }
+        switchTimer?.invalidate(); readyPoll?.invalidate()
+        [current?.view, incoming?.view].compactMap { $0 }.forEach {
+            $0.evaluateJavaScript("window.__saver && window.__saver.stop && window.__saver.stop()")
+        }
         super.stopAnimation()
     }
 
     /// Every 10 s, log the page's state so a frozen saver can be diagnosed with
     /// `/usr/bin/log show --predicate 'subsystem == "<bundle id>"'`.
     open override func animateOneFrame() {
-        guard !views.isEmpty else { return }
+        guard let cur = current else { return }
+        let name = pages[cur.page].name
         let probe = "JSON.stringify({vis: document.visibilityState, ready: window.__saverReady === true, stats: window.__saver && window.__saver.stats ? window.__saver.stats() : null})"
-        views[front].evaluateJavaScript(probe) { result, error in
-            os_log(.default, log: self.log, "probe preview=%{public}d %{public}@ %{public}@",
-                   self.isPreview ? 1 : 0, String(describing: result ?? "nil"), error.map { "err=\($0)" } ?? "")
+        cur.view.evaluateJavaScript(probe) { result, error in
+            os_log(.default, log: self.log, "probe preview=%{public}d page=%{public}@ %{public}@ %{public}@",
+                   self.isPreview ? 1 : 0, name, String(describing: result ?? "nil"), error.map { "err=\($0)" } ?? "")
         }
     }
 
@@ -174,18 +221,18 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
 
     /// Used by the preview host to capture what WebKit actually painted.
     public func snapshot(_ completion: @escaping (NSImage?) -> Void) {
-        guard !views.isEmpty else { return completion(nil) }
-        views[front].takeSnapshot(with: nil) { image, _ in completion(image) }
+        guard let wv = current?.view else { return completion(nil) }
+        wv.takeSnapshot(with: nil) { image, _ in completion(image) }
     }
 
-    /// Used by the preview host to exercise cycling without waiting.
-    public func cycleNow() { prepareNext() }
+    /// Used by the preview host to exercise a switch without waiting.
+    public func cycleNow() { turn(forceChange: true) }
 
     // MARK: WKNavigationDelegate
 
     public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         os_log(.error, log: log, "web content process terminated; reloading")
-        load(webView)
+        webView.reload()
     }
 
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

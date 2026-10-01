@@ -3,3 +3,4 @@ build/
 .claude/
 savers/nonflowers/Resources/worker.src.js
 savers/fishdraw/Resources/worker.src.js
+savers/shuffle/Resources/

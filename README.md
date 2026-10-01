@@ -5,9 +5,10 @@ Native macOS screensavers made from [Lingdong Huang](https://github.com/LingDong
 | Saver | Upstream | What it does |
 |---|---|---|
 | Shan Shui | [shan-shui-inf](https://github.com/LingDong-/shan-shui-inf) | An endless Chinese landscape scroll that pans smoothly across the screen. |
-| Fish Draw | [fishdraw](https://github.com/LingDong-/fishdraw) | Plots one invented fish at a time, stroke by stroke like a pen plotter, with its Latin name. |
+| Fish Draw | [fishdraw](https://github.com/LingDong-/fishdraw) | A wall of invented fish, each plotted stroke by stroke like a pen plotter with its Latin name, staggered so most are finished at any moment. |
 | Nonflowers | [nonflowers](https://github.com/LingDong-/nonflowers) | A wall of Gongbi-style flower paintings that grow from the stem, rest, and are replaced. |
-| Hermit | [Hermit](https://github.com/LingDong-/Hermit) | The 2015 pygame game on autopilot: a rider walks forever through a procedural forest as day turns to night. |
+| Hermit | [Hermit](https://github.com/LingDong-/Hermit) | The 2015 pygame game on autopilot: a rider walks forever through a procedural forest as day turns to night, with random terrain, time of day and wildlife. |
+| Lingdong Shuffle | all of the above | Starts on a random one of the four and every 5 minutes picks again at random; picking the current one leaves it running. |
 
 Apple silicon, macOS 14 or later. Needs only the Command Line Tools, not Xcode. The first Hermit build downloads a pinned, checksum-verified Pyodide runtime (about 20 MB) into a gitignored folder.
 
@@ -15,7 +16,7 @@ Apple silicon, macOS 14 or later. Needs only the Command Line Tools, not Xcode. 
 
 ```
 make install              # build, ad-hoc sign and install every saver
-make install-fishdraw     # just one
+make install-fishdraw     # just one (ids are the folder names in savers/)
 make preview-nonflowers   # run one in a window, no screensaver engine
 make uninstall
 ```
@@ -29,7 +30,7 @@ shell/WebSaverView.swift   generic ScreenSaverView hosting a WKWebView
 shell/main.swift           preview host used by make preview-<id>
 shell/Info.plist.in        bundle template
 scripts/build-saver.sh     builds one saver from savers/<id>
-savers/<id>/saver.conf     name, class, bundle id, background, page, cycle
+savers/<id>/saver.conf     name, class, bundle id, background, page, file access, playlist
 savers/<id>/Resources/     shipped into the bundle; upstream files verbatim
 savers/<id>/prebuild.sh    optional generated-resource step
 savers/<id>/VENDOR.md      upstream commit and what we changed around it
@@ -42,6 +43,7 @@ Each saver gets a generated subclass with its own `@objc` class name. macOS can 
 - **WebKit thinks the page is hidden.** Inside Apple's `legacyScreenSaver` host, WebKit reports the page as hidden even though it is on screen, so `requestAnimationFrame` never fires and animations freeze after one frame. The shell turns off WKWebView's window-occlusion detection, a private setter, guarded so a future WebKit that drops it degrades to a still image instead of crashing.
 - **Smoothness comes from the compositor, not redraws.** Shan Shui pans pre-rendered segments with Web Animations and swaps double buffers with phase-locked start times. Nonflowers reveals paintings in a WebGL shader from a precomputed growth-time map. In both, the expensive generation happens off the critical path.
 - **Hermit runs Python in the browser.** The original Python 2 game is ported minimally to Python 3 and runs under [Pyodide](https://pyodide.org) with pygame-ce, drawing to a canvas at 30 fps. It needs `fetch()` of sibling files, so it opts in to file access with `FILE_ACCESS=1`; the other savers don't. Expect about 330 MB of memory per screen.
+- **Shuffle is a playlist.** `savers/shuffle/prebuild.sh` copies every other saver's Resources into its bundle and writes `playlist.json` from their `saver.conf` files, so new savers join automatically. The shell loads an incoming page fully opaque underneath the current one, waits for `window.__saverReady`, fades the old page out on top and tears it down, so only one page's memory is held between switches.
 - **Workers must be Blob workers.** WKWebView blocks workers loaded from `file://` URLs. Nonflowers bundles its worker source into `worker.src.js` at build time and starts it from a Blob URL.
 - **Debugging.** Every saver logs its page state every 10 seconds under its bundle id. Use the full path, because in zsh `log` is a shell builtin:
 

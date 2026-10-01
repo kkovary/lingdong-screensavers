@@ -6,7 +6,7 @@ import ScreenSaver
 //
 //   WEBSAVER_SNAPSHOT=/path/prefix  write prefix-1.png at 6s and prefix-2.png at 12s, then quit
 //   WEBSAVER_SNAP_TIMES=6,12,30     override snapshot times (seconds)
-//   WEBSAVER_CYCLE_AT=20            trigger a page cycle at 20s (cycling savers only)
+//   WEBSAVER_CYCLE_AT=20            force a playlist switch at 20s (playlist savers only)
 //   WEBSAVER_QUIT_AFTER=45          quit after 45s
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
