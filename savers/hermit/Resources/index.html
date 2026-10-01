@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #F0F0F0; }
+  #container {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    background: #F0F0F0;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="canvas" width="640" height="370"></canvas>
+</div>
+<script>
+// Patch fetch() for file:// URLs.
+// WebKit returns status 0 for file:// responses, which makes Response.ok false.
+// Pyodide's internals (lock file loading, loadPackage, etc.) check resp.ok,
+// so they fail silently.  Re-wrap these responses with status 200.
+(function() {
+  const _origFetch = window.fetch;
+  window.fetch = async function(input, init) {
+    const resp = await _origFetch.call(window, input, init);
+    if (resp.status === 0) {
+      const body = await resp.arrayBuffer();
+      const url = resp.url || (typeof input === 'string' ? input : (input && input.url)) || '';
+      const headers = new Headers();
+      if (url.endsWith('.wasm'))                         headers.set('Content-Type', 'application/wasm');
+      else if (url.endsWith('.js') || url.endsWith('.mjs')) headers.set('Content-Type', 'application/javascript');
+      else if (url.endsWith('.json'))                    headers.set('Content-Type', 'application/json');
+      else if (url.endsWith('.zip') || url.endsWith('.whl')) headers.set('Content-Type', 'application/octet-stream');
+      return new Response(body, { status: 200, statusText: 'OK', headers: headers });
+    }
+    return resp;
+  };
+})();
+
+// Patch WebAssembly.instantiateStreaming for file:// URLs.
+// Streaming compilation requires Content-Type: application/wasm, which file://
+// responses lack. This shim falls back to ArrayBuffer-based compilation.
+const _origStreaming = WebAssembly.instantiateStreaming;
+if (_origStreaming) {
+  WebAssembly.instantiateStreaming = async function(source, imports) {
+    try {
+      return await _origStreaming.call(WebAssembly, source, imports);
+    } catch (e) {
+      const resp = (source instanceof Response) ? source : await source;
+      const bytes = await resp.arrayBuffer();
+      return WebAssembly.instantiate(bytes, imports);
+    }
+  };
+}
+</script>
+<script src="pyodide/pyodide.js"></script>
+<!-- saver.js is injected by WebSaverView via WKUserScript at document end -->
+</body>
+</html>

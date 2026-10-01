@@ -7,6 +7,11 @@ source "$dir/saver.conf"
 : "${NAME:?}" "${TITLE:?}" "${CLASS:?}" "${BUNDLE_ID:?}"
 BG="${BG:-FFFFFF}"; CYCLE="${CYCLE:-0}"; COPYRIGHT="${COPYRIGHT:-}"
 
+# Run per-saver prebuild hook if present (e.g. fetch vendored dependencies).
+if [ -x "$dir/prebuild.sh" ]; then
+  "$dir/prebuild.sh"
+fi
+
 out=build/$NAME.saver
 gen=build/gen/$NAME; mkdir -p "$gen"
 SWIFTC=(swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -module-name "$NAME"

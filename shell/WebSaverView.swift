@@ -61,6 +61,11 @@ open class WebSaverView: ScreenSaverView, WKNavigationDelegate {
 
     private func makeWebView(_ res: URL) -> WKWebView? {
         let config = WKWebViewConfiguration()
+        // Savers that bundle WASM runtimes (e.g. Pyodide) need JavaScript on
+        // the file:// page to fetch sibling file:// resources.  Without this,
+        // WebKit's CORS policy blocks WASM loading even though loadFileURL
+        // grants read access to the Resources directory.
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         let scriptURL = res.appendingPathComponent(info("WSScript") ?? "saver.js")
         if let js = try? String(contentsOf: scriptURL, encoding: .utf8) {
             config.userContentController.addUserScript(
