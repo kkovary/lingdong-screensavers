@@ -12,7 +12,7 @@
   "use strict";
   var GROW_S = [16, 34];      // random growth duration per painting
   var HOLD_S = [35, 80];      // how long a finished painting rests: most of the wall is still
-  var BUSY_SHARE = 0.2;       // at most this share of cards growing or changing at once (calmer than the fish)
+  var BUSY_SHARE = 0.35;      // at most this share of cards growing or changing at once
   var START_DONE = 0.6;       // share of cards that open already in bloom, mid-rest
   var PREFETCH_S = 15;        // ask for the next painting this long before a rest ends
   var FADE_S = 2.5;           // card fade in/out
@@ -192,6 +192,12 @@
 
   // State machine per card, on our own clock (seconds).
   var MAX_BUSY = Math.max(1, Math.round(cards.length * BUSY_SHARE));
+  // Space growth starts evenly so the growing cards are at different stages
+  // (one sprouting, one halfway, one opening) instead of moving together.
+  var START_GAP_S = (GROW_S[0] + GROW_S[1]) / 2 / MAX_BUSY;
+  var nextStartAt = 0;
+  function mayStart() { return busy() < MAX_BUSY && clock >= nextStartAt; }
+  function reserveStart() { nextStartAt = clock + START_GAP_S * (0.75 + Math.random() * 0.5); }
   function busy() {
     var n = 0;
     for (var i = 0; i < cards.length; i++) { var st = cards[i].state; if (st === "pregrow" || st === "grow" || st === "fadeout") n++; }
@@ -223,10 +229,10 @@
             install(cd, cd.next); fade(cd, 1);
             // Open at a random point in the cycle: most cards already in bloom and
             // partway through resting, the rest growing as slots allow.
-            if (Math.random() < START_DONE || busy() >= MAX_BUSY) {
+            if (Math.random() < START_DONE || !mayStart()) {
               finishGrowth(cd); cd.state = "hold"; cd.at = clock + Math.random() * rand(HOLD_S);
             } else {
-              cd.state = "pregrow"; cd.at = clock + FADE_S + Math.random() * 6;
+              reserveStart(); cd.state = "pregrow"; cd.at = clock + FADE_S;
             }
           }
           break;
@@ -243,14 +249,14 @@
           // Fetch the next painting shortly before the rest ends (also retries a failed one),
           // then change only when a growth slot is free.
           if (cd.next === null && clock >= cd.at - PREFETCH_S) askFor(cd);
-          if (clock >= cd.at && cd.next && cd.next !== "pending" && busy() < MAX_BUSY) {
-            fade(cd, 0); cd.state = "fadeout"; cd.at = clock + FADE_S;
+          if (clock >= cd.at && cd.next && cd.next !== "pending" && mayStart()) {
+            reserveStart(); fade(cd, 0); cd.state = "fadeout"; cd.at = clock + FADE_S;
           }
           break;
         case "fadeout":
           if (clock >= cd.at) {
             install(cd, cd.next); fade(cd, 1);
-            cd.state = "pregrow"; cd.at = clock + FADE_S + Math.random() * 2;
+            cd.state = "pregrow"; cd.at = clock + FADE_S;
           }
           break;
       }
@@ -266,7 +272,10 @@
       var secs = stats.since === null ? 0 : (performance.now() - stats.since) / 1000;
       var by = {};
       cards.forEach(function (c) { by[c.state] = (by[c.state] || 0) + 1; });
-      var out = { grid: cols + "x" + rows, maxBusy: MAX_BUSY, card: card, K: K, pool: POOL, made: stats.made, lastGenMs: stats.genMs,
+      var prog = cards.filter(function (c) { return c.state === "grow" && c.grow; })
+                      .map(function (c) { return Math.round(100 * Math.min(1, (clock - c.grow.start) / c.grow.dur)); })
+                      .sort(function (a, b) { return a - b; });
+      var out = { grid: cols + "x" + rows, maxBusy: MAX_BUSY, gapS: Math.round(START_GAP_S * 10) / 10, growingPct: prog.join("/"), card: card, K: K, pool: POOL, made: stats.made, lastGenMs: stats.genMs,
                   fps: Math.round(stats.frames / Math.max(secs, 0.001)), maxGapMs: Math.round(stats.maxGap),
                   worstFrameMs: Math.round(stats.worstMs), states: by, queued: queue.length,
                   errors: errors.slice(-3) };
