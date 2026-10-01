@@ -11,6 +11,8 @@
   var ZOOM = 1.142;                 // upstream calcViewBox zoom: 1 viewBox unit = ZOOM px
   var SPEED = 24;                   // viewBox units per second
   var SEGMENT = 200;                // units per static render
+  // Upstream easter egg: some one-story pavilions get a "Pizza Hut" roof sign.
+  var SIGN_FROM = ">Pizza Hut</text>", SIGN_TO = ">Octant</text>";
   var DURATION = SEGMENT / SPEED;   // seconds per segment
   var running = false, timer = null;
   var bufs = [], front = 0;
@@ -55,7 +57,7 @@
     el.innerHTML =
       "<svg xmlns='http://www.w3.org/2000/svg' width='" + W + "' height='" + H + "' " +
       "viewBox='" + x + " 0 " + (W / ZOOM) + " " + (H / ZOOM) + "'>" +
-      "<g>" + MEM.canv + "</g></svg>";
+      "<g>" + MEM.canv.split(SIGN_FROM).join(SIGN_TO) + "</g></svg>";
   }
 
   // --- segment loop ----------------------------------------------------------
