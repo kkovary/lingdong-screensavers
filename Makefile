@@ -1,42 +1,31 @@
-NAME     := ShanShui
-BUNDLE   := build/$(NAME).saver
-CONTENTS := $(BUNDLE)/Contents
-INSTALL  := $(HOME)/Library/Screen\ Savers
-SWIFTC   := swiftc -swift-version 5 -O -target arm64-apple-macos14.0
-FRAMEWORKS := -framework ScreenSaver -framework WebKit -framework AppKit
+# make                    build every saver in savers/
+# make install            build and install all into ~/Library/Screen Savers
+# make install-<id>       one saver, e.g. make install-fishdraw
+# make preview-<id>       open one saver in a window
+# make uninstall          remove all of them
+SAVERS  := $(notdir $(wildcard savers/*))
+INSTALL := $(HOME)/Library/Screen Savers
+name     = $(shell . savers/$(1)/saver.conf && echo $$NAME)
 
-.PHONY: build install preview uninstall clean
+.PHONY: all install uninstall clean $(addprefix build-,$(SAVERS)) $(addprefix install-,$(SAVERS)) $(addprefix preview-,$(SAVERS))
 
-build: $(CONTENTS)/MacOS/$(NAME)
+all: $(addprefix build-,$(SAVERS))
+install: $(addprefix install-,$(SAVERS))
 
-$(CONTENTS)/MacOS/$(NAME): Sources/ShanShuiView.swift Info.plist Resources/*
-	rm -rf $(BUNDLE)
-	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Resources
-	$(SWIFTC) -emit-library -module-name $(NAME) $(FRAMEWORKS) \
-	    -Xlinker -install_name -Xlinker @executable_path/../MacOS/$(NAME) \
-	    -o $@ Sources/ShanShuiView.swift
-	cp Info.plist $(CONTENTS)/Info.plist
-	cp Resources/index.html Resources/saver.js Resources/VENDOR.md $(CONTENTS)/Resources/
-	codesign --force --sign - $(BUNDLE)
+$(addprefix build-,$(SAVERS)): build-%:
+	@scripts/build-saver.sh savers/$*
 
-install: build
-	rm -rf $(INSTALL)/$(NAME).saver
-	mkdir -p $(INSTALL)
-	cp -R $(BUNDLE) $(INSTALL)/
-	-killall legacyScreenSaver 2>/dev/null
-	-killall "System Settings" 2>/dev/null
-	@echo "Installed. Open System Settings > Wallpaper > Screen Saver and pick Shan Shui."
+$(addprefix install-,$(SAVERS)): install-%: build-%
+	@n=$(call name,$*); rm -rf "$(INSTALL)/$$n.saver"; mkdir -p "$(INSTALL)"; cp -R "build/$$n.saver" "$(INSTALL)/"; echo "installed $$n.saver"
+	@-killall legacyScreenSaver 2>/dev/null; true
+
+$(addprefix preview-,$(SAVERS)): preview-%: build-%
+	@scripts/build-saver.sh savers/$* preview
+	@n=$(call name,$*); WEBSAVER_BUNDLE="$(CURDIR)/build/$$n.saver" ./build/preview-$$n
 
 uninstall:
-	rm -rf $(INSTALL)/$(NAME).saver
-	-killall legacyScreenSaver 2>/dev/null
-
-build/preview: Sources/ShanShuiView.swift Sources/main.swift
-	mkdir -p build
-	$(SWIFTC) $(FRAMEWORKS) -o $@ Sources/ShanShuiView.swift Sources/main.swift
-
-preview: build/preview
-	SHAN_SHUI_RESOURCES=$(CURDIR)/Resources ./build/preview
+	@for s in $(SAVERS); do n=$$(. savers/$$s/saver.conf && echo $$NAME); rm -rf "$(INSTALL)/$$n.saver"; done
+	@-killall legacyScreenSaver 2>/dev/null; true
 
 clean:
 	rm -rf build

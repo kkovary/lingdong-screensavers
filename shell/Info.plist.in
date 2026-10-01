@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>ShanShui</string>
+	<string>@NAME@</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.kylekovary.ShanShui</string>
+	<string>@BUNDLE_ID@</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Shan Shui</string>
+	<string>@TITLE@</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
@@ -21,8 +21,12 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Art: shan-shui-inf © 2018 Lingdong Huang (MIT).</string>
+	<string>@COPYRIGHT@</string>
 	<key>NSPrincipalClass</key>
-	<string>ShanShuiView</string>
+	<string>@CLASS@</string>
+	<key>WSBackground</key>
+	<string>@BG@</string>
+	<key>WSCycleSeconds</key>
+	<string>@CYCLE@</string>
 </dict>
 </plist>
