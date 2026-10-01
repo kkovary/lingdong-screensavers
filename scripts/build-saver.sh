@@ -5,7 +5,10 @@ dir="${1%/}"; mode="${2:-saver}"
 # shellcheck source=/dev/null
 source "$dir/saver.conf"
 : "${NAME:?}" "${TITLE:?}" "${CLASS:?}" "${BUNDLE_ID:?}"
-BG="${BG:-FFFFFF}"; CYCLE="${CYCLE:-0}"; COPYRIGHT="${COPYRIGHT:-}"
+BG="${BG:-FFFFFF}"; CYCLE="${CYCLE:-0}"; COPYRIGHT="${COPYRIGHT:-}"; INDEX="${INDEX:-index.html}"
+
+# Optional per-saver build step (generated resources, vendored downloads).
+if [ -x "$dir/prebuild.sh" ]; then "$dir/prebuild.sh"; fi
 
 out=build/$NAME.saver
 gen=build/gen/$NAME; mkdir -p "$gen"
@@ -31,7 +34,7 @@ mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
   -o "$out/Contents/MacOS/$NAME" shell/WebSaverView.swift "$gen/Principal.swift"
 sed -e "s|@NAME@|$NAME|g" -e "s|@TITLE@|$TITLE|g" -e "s|@CLASS@|$CLASS|g" \
     -e "s|@BUNDLE_ID@|$BUNDLE_ID|g" -e "s|@BG@|$BG|g" -e "s|@CYCLE@|$CYCLE|g" \
-    -e "s|@COPYRIGHT@|$COPYRIGHT|g" shell/Info.plist.in > "$out/Contents/Info.plist"
+    -e "s|@COPYRIGHT@|$COPYRIGHT|g" -e "s|@INDEX@|$INDEX|g" shell/Info.plist.in > "$out/Contents/Info.plist"
 plutil -lint -s "$out/Contents/Info.plist"
 cp -R "$dir/Resources/." "$out/Contents/Resources/"
 codesign --force --sign - "$out" 2>/dev/null

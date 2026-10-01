@@ -1,33 +1,33 @@
-// Injected into nonflowers at document end, after main.js has run but before
-// body onload kicks off generation.
+// Paint worker: runs upstream nonflowers (main.js, unmodified) off the main
+// thread and returns each painting ready to grow.
 //
-// Upstream paints every plant onto a fixed 600x600 canvas, which looks soft
-// once scaled up to fill a screen. All of its raw-pixel work goes through the
-// small `Layer` helper, so we wrap that: canvases are created K times larger
-// with a K-scaled context, so every vector drawing call lands at full
-// resolution unchanged, and the four pixel-level helpers are adjusted to
-// match. Filters receive logical (600-space) coordinates so the brush-texture
-// noise keeps upstream's look, and bounds come back in logical units.
-// The pixel loops are rewritten without per-pixel array allocation because
-// they now touch up to K*K as many pixels; their results are identical.
+// Bundled at build time by prebuild.sh as: worker-shim.js + main.js + this
+// file, embedded as a string and started from a Blob URL (file-URL workers
+// are blocked in WKWebView; blob workers with OffscreenCanvas work).
 //
-// Growth animation: upstream paints the plant on scratch layers, filters
-// them, and blits the result in one go, so there is no stroke order to
-// replay. Instead we snapshot the bare paper just before the plant is drawn,
-// diff it against the finished painting to find plant pixels, and measure
-// each one's distance from the stem base *along the plant* (BFS on a coarse
-// grid). The painting is then revealed in that order, so it grows up the
-// stems and out into leaves and flowers. Each frame copies only the newly
-// grown pixels and uploads only the 64px tiles they touched.
+// High resolution: upstream paints onto a fixed 600x600 canvas. All of its
+// raw-pixel work goes through the small `Layer` helper, so we wrap that:
+// canvases are created K times larger with a K-scaled context, so every
+// vector drawing call lands at full resolution unchanged, and the four
+// pixel-level helpers are adjusted to match. Filters receive logical
+// (600-space) coordinates so the brush-texture noise keeps upstream's look,
+// and bounds come back in logical units. The pixel loops are rewritten
+// without per-pixel allocation; their results are identical.
+//
+// Growth order: upstream paints the plant on scratch layers, filters them,
+// and blits the result in one go, so there is no stroke order to replay. We
+// snapshot the bare paper just before the plant is drawn, diff it against
+// the finished painting to find plant pixels, and measure each one's
+// distance from the true stem base *along the plant*, and return it as a
+// per-pixel growth-time map that the main thread's shader thresholds.
 (function () {
   "use strict";
-  var FILL = 0.88;                                   // painting height as a fraction of the screen
-  var dpr = window.devicePixelRatio || 1;
-  var K = Math.max(1, Math.min(4, Math.ceil(Math.min(innerWidth, innerHeight) * dpr * FILL / 600)));
-  var genStart = null, genMs = null;
-  var GROW_S = 25;            // seconds for the plant to grow
-  var GROW_DELAY_S = 3.5;     // let the card fade or crossfade in first
-  var rootGuess = null, dbg = null, paperSnap = null, grow = null, started = true, raf = null;   // self-start; the shell's start() may arrive before load
+  var K = 1;                  // set per painting request
+
+  // genParams() also renders the parameter summary table into the page; it is
+  // a pure side effect, and there is no page here.
+  self.vizParams = function () {};
+  var rootGuess = null, dbg = null, paperSnap = null, grow = null, dummy = null;
 
   function k(ctx) { return ctx.canvas.__k || 1; }
 
@@ -40,7 +40,7 @@
     canvas.__k = K;
     var ctx = canvas.getContext("2d");
     ctx.scale(K, K);
-    window.context = ctx;                            // upstream leaks this global; keep it
+    self.context = ctx;                              // upstream leaks this global; keep it
     return ctx;
   };
 
@@ -53,7 +53,7 @@
     var c = ctx1.canvas, s = k(ctx1);
     // woody() and herbal() grow every plant from (0.5, 0.7) of their scratch
     // layer, so the paste offset tells us where the plant's root lands.
-    if (ctx0 === window.CTX) rootGuess = { x: xof + (c.width / s) * 0.5, y: yof + (c.height / s) * 0.7 };
+    if (ctx0 === self.CTX) rootGuess = { x: xof + (c.width / s) * 0.5, y: yof + (c.height / s) * 0.7 };
     ctx0.drawImage(c, xof, yof, c.width / s, c.height / s);
   };
 
@@ -99,9 +99,9 @@
 
   // --- growth animation --------------------------------------------------
   ["woody", "herbal"].forEach(function (name) {
-    var orig = window[name];
-    window[name] = function (args) {
-      if (args && args.ctx === window.CTX) {
+    var orig = self[name];
+    self[name] = function (args) {
+      if (args && args.ctx === self.CTX) {
         var c = args.ctx.canvas;
         paperSnap = args.ctx.getImageData(0, 0, c.width, c.height);
       }
@@ -214,7 +214,10 @@
       return dist[gy * gw + gx];
     }
     var WOBBLE = 7, GRAIN = 1.2;
-    var NB = 1500, span = maxD + WOBBLE + GRAIN + 1, counts = new Int32Array(NB + 1), when = new Uint16Array(W * H);
+    var span = maxD + WOBBLE + GRAIN + 1;
+    // Growth-time map for the GPU: 16 bits per pixel as (hi, lo) bytes in a
+    // two-channel texture. Pixels the plant doesn't change keep time 0.
+    var T = new Uint8Array(W * H * 2);
     for (var pp = 0, n2 = W * H; pp < n2; pp++) {
       if (!diff[pp]) continue;
       var lx = (pp % W) / K - 0.5, ly = ((pp / W) | 0) / K - 0.5;
@@ -226,91 +229,37 @@
       dv = cellD(x0 + 1, y0 + 1); wt = fx * fy;             if (dv < INF) { acc += dv * wt; wsum += wt; }
       var t = wsum > 0 ? acc / wsum : maxD;
       t += WOBBLE * Noise.noise(lx * 0.07, ly * 0.07, 7.3) + GRAIN * Math.random();
-      var bkt = Math.max(0, Math.min(NB - 1, Math.floor(t / span * NB)));
-      when[pp] = bkt; counts[bkt + 1]++;
+      var q16 = Math.max(1, Math.min(65535, Math.round(t / span * 65535)));
+      T[pp * 2] = q16 >> 8; T[pp * 2 + 1] = q16 & 255;
     }
-    for (var cb = 0; cb < NB; cb++) counts[cb + 1] += counts[cb];
-    var order = new Int32Array(counts[NB]), fillAt = counts.slice(0, NB);
-    var tot = counts[NB], pct = [10, 25, 50, 75, 90, 99].map(function (q) {
-      var want = tot * q / 100, lo = 0; while (lo < NB && counts[lo + 1] < want) lo++; return Math.round(100 * lo / NB);
-    });
-    dbg.pixels = tot; dbg.bucketPctAtPixelPct_10_25_50_75_90_99 = pct.join("/");
-    for (var p3 = 0, n3 = W * H; p3 < n3; p3++) if (diff[p3]) order[fillAt[when[p3]]++] = p3;
-    return { ctx: ctx, W: W, H: H, Fimg: Fimg, F: F, D: paperSnap, order: order, starts: counts,
-             NB: NB, next: 0, t0: null, done: false };
+    return { W: W, H: H, F: F, P: paperSnap.data, T: T };
   }
 
-  var TILE = 64, fr = { n: 0, maxGap: 0, last: null, worstMs: 0 };
-  function growFrame(now) {
-    raf = null;
-    var g = grow, w0 = performance.now();
-    if (g && g.t0 !== null && now >= g.t0) {
-      if (fr.last !== null) { fr.n++; fr.maxGap = Math.max(fr.maxGap, now - fr.last); }
-      fr.last = now;
+  // --- messages ----------------------------------------------------------
+  self.onmessage = function (e) {
+    try { handle(e.data); }
+    catch (err) { self.postMessage({ cmd: "painting", id: e.data.id, failed: true, error: String(err) + " | " + (err.stack || "").split("\n").slice(0, 3).join(" < ") }); }
+  };
+  function handle(m) {
+    if (m.cmd === "paper") {                  // background paper texture tile
+      Math.seed(m.seed);
+      var pc = paper({ col: PAPER_COL0, tex: 10, spr: 0 });
+      var pd = pc.getContext("2d").getImageData(0, 0, pc.width, pc.height);
+      self.postMessage({ cmd: "paper", w: pc.width, h: pc.height, buf: pd.data.buffer }, [pd.data.buffer]);
+      return;
     }
-    if (!g || g.done || !started) return;
-    if (g.t0 === null) g.t0 = now + GROW_DELAY_S * 1000;
-    var prog = Math.max(0, (now - g.t0) / (GROW_S * 1000));
-    var target = Math.min(g.NB, Math.floor(prog * g.NB));
-    if (target > g.next) {
-      var tw = Math.ceil(g.W / TILE), dirty = {}, F = g.F, D = g.D.data;
-      for (var k2 = g.starts[g.next], end = g.starts[target]; k2 < end; k2++) {
-        var p4 = g.order[k2], i4 = p4 * 4;
-        D[i4] = F[i4]; D[i4 + 1] = F[i4 + 1]; D[i4 + 2] = F[i4 + 2]; D[i4 + 3] = F[i4 + 3];
-        dirty[((((p4 / g.W) | 0) / TILE) | 0) * tw + (((p4 % g.W) / TILE) | 0)] = 1;
-      }
-      for (var key in dirty) {
-        var tx = (key % tw) * TILE, ty = ((key / tw) | 0) * TILE;
-        g.ctx.putImageData(g.D, 0, 0, tx, ty, TILE, TILE);
-      }
-      g.next = target;
-      fr.worstMs = Math.max(fr.worstMs, performance.now() - w0);
+    if (m.cmd === "paint") {
+      K = m.K; Math.seed(m.seed);
+      paperSnap = null; rootGuess = null; dbg = null;
+      var t0 = performance.now();
+      generate();
+      var g = paperSnap ? prepareGrowth(self.CTX) : null;
+      if (!g) { self.postMessage({ cmd: "painting", id: m.id, failed: true }); return; }
+      self.postMessage({
+        cmd: "painting", id: m.id, W: g.W, H: g.H,
+        F: g.F.buffer, P: g.P.buffer, T: g.T.buffer,
+        genMs: Math.round(performance.now() - t0), dbg: dbg
+      }, [g.F.buffer, g.P.buffer, g.T.buffer]);
     }
-    if (g.next >= g.NB) { g.ctx.putImageData(g.Fimg, 0, 0); g.done = true; g.D = g.order = null; return; }
-    raf = requestAnimationFrame(growFrame);
   }
-
-  // Time generation, set up growth, and flag readiness for the shell's crossfade.
-  var origGenerate = window.generate;
-  window.generate = function () {
-    genStart = performance.now();
-    var r = origGenerate.apply(this, arguments);
-    if (paperSnap) {
-      grow = prepareGrowth(window.CTX);
-      if (grow) window.CTX.putImageData(grow.D, 0, 0);   // start from bare paper
-    }
-    genMs = Math.round(performance.now() - genStart);
-    return r;
-  };
-
-  var css = document.createElement("style");
-  css.textContent =
-    "#loader, #options, #summary, #settings, #share, #content > div:not(#canvas-container), #content table { display: none !important; }" +
-    "html, body { margin: 0; height: 100%; overflow: hidden; }" +
-    "#canvas-container { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }" +
-    "#canvas-container canvas { width: " + (FILL * 100) + "vmin; height: " + (FILL * 100) + "vmin; opacity: 0; transition: opacity 3s ease; }" +
-    "#canvas-container canvas.shown { opacity: 1; }";
-  document.head.appendChild(css);
-
-  new MutationObserver(function (_, obs) {
-    var c = document.querySelector("#canvas-container canvas");
-    if (!c) return;
-    obs.disconnect();
-    requestAnimationFrame(function () {
-      c.classList.add("shown");
-      window.__saverReady = true;
-      if (started && raf === null) raf = requestAnimationFrame(growFrame);
-    });
-  }).observe(document.getElementById("canvas-container"), { childList: true });
-
-  window.__saver = {
-    start: function () { started = true; if (raf === null) raf = requestAnimationFrame(growFrame); },
-    stop: function () { started = false; if (raf !== null) { cancelAnimationFrame(raf); raf = null; } },
-    stats: function () {
-      return { K: K, genMs: genMs, ready: window.__saverReady === true,
-               grown: grow ? Math.round(100 * grow.next / grow.NB) : null,
-               dbg: dbg, growFrames: fr.n, maxGapMs: Math.round(fr.maxGap), worstFrameMs: Math.round(fr.worstMs),
-               w: innerWidth, h: innerHeight };
-    }
-  };
 })();

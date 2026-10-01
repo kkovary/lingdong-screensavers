@@ -26,6 +26,8 @@
 	<string>@CLASS@</string>
 	<key>WSBackground</key>
 	<string>@BG@</string>
+	<key>WSIndex</key>
+	<string>@INDEX@</string>
 	<key>WSCycleSeconds</key>
 	<string>@CYCLE@</string>
 </dict>
